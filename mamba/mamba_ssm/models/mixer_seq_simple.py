@@ -152,20 +152,17 @@ class MixerModel(nn.Module):
         hidden_states = self.embedding(input_ids)
         residual = None
         if inference_params is not None and inference_params.draft_model:
-            print("draft draft xxx")
             conv_ssm_state_kv_dict = dict()
         for layer_idx, layer in enumerate(self.layers):
             hidden_states, residual = layer(
                 hidden_states, residual, inference_params=inference_params
             )
             if inference_params is not None and inference_params.draft_model:
-                print("draft draft xxx")
                 conv_state, ssm_state = inference_params.key_value_memory_dict[layer_idx]
                 conv_ssm_state_kv_dict[layer_idx] = (conv_state.clone(), ssm_state.clone())
-        if inference_params is not None and inference_params.draft_model:
-            print("draft draft xxx")      
+        if inference_params is not None and inference_params.draft_model:  
             inference_params.prev_memory_list.append(conv_ssm_state_kv_dict)
-            print("inference_params.prev_memory_list:", len(inference_params.prev_memory_list), flush=True)
+            # print("inference_params.prev_memory_list:", len(inference_params.prev_memory_list), flush=True)
             
         if not self.fused_add_norm:
             residual = (hidden_states + residual) if residual is not None else hidden_states

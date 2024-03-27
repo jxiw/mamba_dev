@@ -1,4 +1,4 @@
-from ssm.mambabyte  import ByteMambaLMHeadModel
+from ssm.mambabyte import ByteMambaLMHeadModel
 from ssm.mambasubword import SubWordMambaLMHeadModel
 
 from tqdm import tqdm
@@ -14,7 +14,7 @@ import random
 import tensorflow_datasets as tfds
 
 dist.init_process_group(init_method='env://', backend='nccl')
-    
+
 vocab_fname = '/home/jw2544/SSMWord/preprocessing/pg_subword_tokenizer'
 encoder = tfds.deprecated.text.SubwordTextEncoder.load_from_file(vocab_fname)
 
@@ -41,13 +41,15 @@ mambabyte_config = {
 }
 
 mambabyte_config = PretrainedConfig(**{**mambabyte_config, 'vocab_size': 256})
-mambabyte = ByteMambaLMHeadModel(config=mambabyte_config, dtype=torch.bfloat16, device="cuda")
-mambabyte= torch.nn.parallel.DistributedDataParallel(
+mambabyte = ByteMambaLMHeadModel(
+    config=mambabyte_config, dtype=torch.bfloat16, device="cuda")
+mambabyte = torch.nn.parallel.DistributedDataParallel(
     mambabyte,
     device_ids=[0],
     output_device=0,
 )
-mambabyte.load_state_dict(torch.load(f"/share/rush/pile/pg19_971M/model.pt", map_location=torch.device('cpu')))
+mambabyte.load_state_dict(torch.load(
+    f"/share/rush/pile/pg19_971M/model.pt", map_location=torch.device('cpu')))
 
 mambasubword_hidden_size = 1792
 mambasubword_num_hidden_layers = 48
@@ -66,14 +68,17 @@ mambasubword_config = {
     "pad_id": 0,
     "gen": True,
 }
-mambasubword_config = PretrainedConfig(**{**mambasubword_config, 'vocab_size': 32070})
-mambasubword = SubWordMambaLMHeadModel(config=mambasubword_config, dtype=torch.bfloat16, device="cuda")
+mambasubword_config = PretrainedConfig(
+    **{**mambasubword_config, 'vocab_size': 32070})
+mambasubword = SubWordMambaLMHeadModel(
+    config=mambasubword_config, dtype=torch.bfloat16, device="cuda")
 mambasubword = torch.nn.parallel.DistributedDataParallel(
     mambasubword,
     device_ids=[0],
     output_device=0,
 )
-mambasubword.load_state_dict(torch.load(f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-51000/model.pt", map_location=torch.device('cpu')))  
+mambasubword.load_state_dict(torch.load(
+    f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-51000/model.pt", map_location=torch.device('cpu')))
 
 # large mamba subword model
 # mamba_config = {
@@ -98,8 +103,8 @@ mambasubword.load_state_dict(torch.load(f"/home/jw2544/SSMWord/train/mamba_h1024
 # )
 # mambasubword.load_state_dict(torch.load(f"/home/jw2544/SSMWord/train/mamba_h1792_l48_2048_subword_best/model.pt", map_location=torch.device('cpu')))
 
-mambabyte=mambabyte.module
-mambasubword=mambasubword.module
+mambabyte = mambabyte.module
+mambasubword = mambasubword.module
 
 print("load finish!")
 
@@ -121,14 +126,17 @@ this voyage their bills signed.  Having wrote letters into the country and
 read some things I went to bed.
 '''
 
+
 def text_to_subword_tokens(text_to_test):
     pg_train_tokens = encoder.encode(text_to_test)
     input_ids = torch.tensor(pg_train_tokens)[None, :]
     input_ids = input_ids.cuda()
     return input_ids
 
+
 def subword_tokens_to_text(draft_tokens):
     return encoder.decode(draft_tokens[0])
+
 
 def text_to_byte_tokens(text_to_test):
     text_to_test = text_to_test.replace('\n', '\r\n')
@@ -136,16 +144,48 @@ def text_to_byte_tokens(text_to_test):
     input_ids = torch.from_numpy(input_ids)[None, :].long().cuda()
     return input_ids
 
+
 def byte_tokens_to_text(byte_array):
     return bytes(byte_array).decode('utf-8').replace('\r\n', '\n')
+
 
 def is_boundary(token):
     # Check if the token is for space (32) or newline (10)
     return token == 32 or token == 10
 
+
+def text_tokens_to_byte_tokens_dict(text_tokens):
+    word_to_byte_tokens_dict = []
+    byte_index = 0  # Initialize byte index
+    for i, token in enumerate(text_tokens[0, :]):
+        # Start index of the current token in byte representation
+        start_byte_index = byte_index
+        token_text = encoder.decode([token])
+        byte_token_text = token_text.replace('\r\n', '\n')
+        # Increment byte_index by the byte length of the token
+        byte_index += len(byte_token_text.encode('utf-8'))
+        # End index is the new byte index
+        end_byte_index = byte_index
+        # Store the mapping
+        word_to_byte_tokens_dict.append((start_byte_index, end_byte_index))
+    return word_to_byte_tokens_dict
+
+
+def test_text_tokens_to_byte_tokens_dict():
+    input_ids = text_to_subword_tokens(prompt)
+    word_to_byte_tokens_dict = text_tokens_to_byte_tokens_dict(input_ids)
+    # print(word_to_byte_tokens_dict)
+    byte_prompt = prompt.replace('\r\n', '\n')
+    for token, (start, end) in word_to_byte_tokens_dict.items():
+        token_text = encoder.decode(
+            [input_ids[0, token]]).replace('\r\n', '\n')
+        byte_text = byte_prompt[start:end]
+        assert token_text == byte_text
+        # print(token_text, byte_text)
+
 # Initialize CUDA events
-start_event = torch.cuda.Event(enable_timing=True)
-end_event = torch.cuda.Event(enable_timing=True)
+# start_event = torch.cuda.Event(enable_timing=True)
+# end_event = torch.cuda.Event(enable_timing=True)
 
 input_ids = text_to_subword_tokens(prompt)
 byte_ids = text_to_byte_tokens(prompt)
@@ -166,6 +206,7 @@ output = mambasubword.generate(
     draft_tokens_to_text=subword_tokens_to_text,
     text_to_verifier_tokens=text_to_byte_tokens,
     verifier_tokens_to_text=byte_tokens_to_text,
-    start_verify_idx=byte_ids.shape[1],
+    verifier_tokens_draft_tokens_dict=text_tokens_to_byte_tokens_dict,
+    prompt_start_idx=byte_ids.shape[1],
     is_boundary=is_boundary,
 )

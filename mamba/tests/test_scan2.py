@@ -8,7 +8,7 @@ import selective_scan_cuda
 batch_size = 2
 dim = 2048
 dstate = 16
-seqlen = 20000
+seqlen = 4096*2+100
 device = 'cuda'
 wtype = torch.float32
 itype = torch.float32
@@ -51,18 +51,24 @@ z_first, z_second = torch.chunk(z, chunks=2, dim=-1)
 u_first, u_second = torch.chunk(u, chunks=2, dim=-1)
 delta_first, delta_second = torch.chunk(delta, chunks=2, dim=-1)
 
+resume_state = torch.zeros((batch_size, dim, dstate))
+
 out_first, x_first, *rest = selective_scan_cuda.fwd(u_first, delta_first, A, B_first, C_first, D, z_first, delta_bias, delta_softplus, None)
 first_last_state = x_first[:, :, -1, 1::2]
 
+print("first_last_state:", first_last_state.shape)
 # print(x_first)
 # print("x_first.shape:", x_first.shape)
 
-x_first[:, :, 0, :] = x_first[:, :, -1, :]
-x_first[:, :, 1:, :] = 0
+# x_first_last_state = x_first[:, :, -1, 1::2].contiguous()
+# x_first[:, :, 1:, :] = 0
 
-# print(x_first.shape)
+resume_state.copy_(x_first[:, :, -1, 1::2])
 
-out_second, x_second, *rest = selective_scan_cuda.fwd(u_second, delta_second, A, B_second, C_second, D, z_second, delta_bias, delta_softplus, x_first)
+print(resume_state.shape)
+print(resume_state.stride())
+
+out_second, x_second, *rest = selective_scan_cuda.fwd(u_second, delta_second, A, B_second, C_second, D, z_second, delta_bias, delta_softplus, resume_state)
 second_last_state = x_second[:, :, -1, 1::2]
 
 rtol, atol = (6e-4, 2e-3)

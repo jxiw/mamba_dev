@@ -116,7 +116,8 @@ def decode(
     draft_tokens_to_text=None,
     text_to_verifier_tokens=None,
     verifier_tokens_to_text=None,
-    start_verify_idx=None,
+    verifier_tokens_draft_tokens_dict=None,
+    prompt_start_idx=None,
     is_boundary=None,
 ):
     """Decoding, either greedy or with top-k or top-p sampling.
@@ -193,7 +194,7 @@ def decode(
             return True
         return False
 
-    def get_mismatch_position(verify_model_logits, verifier_tokens, start_verify_idx, topK=3):
+    def get_mismatch_position(verify_model_logits, verifier_tokens, start_verify_idx, topK=2):
         # get the ranks of label output logits from draft model
         # within top K candidate of verify model
         verifier_tokens_logits = torch.gather(verify_model_logits, 2, verifier_tokens.unsqueeze(-1))
@@ -212,7 +213,7 @@ def decode(
         start.record()
     
     scores, sequences = [], [input_ids]
-    output_sequences = []
+    # output_sequences = []
     verify_current_step = 0
     print("====state====")
     
@@ -225,6 +226,8 @@ def decode(
         sequences.append(sample_tokens(scores[-1], inference_params))
         
         if verify_current_step % verify_block == verify_block - 1:
+            print("sequences:", sequences)
+            
             # print("reach to block!")
             # print("length:", len(inference_params.prev_memory_list))
             # reach to the end of block
@@ -232,9 +235,11 @@ def decode(
             if verify_current_step == verify_block - 1:
                 # for first verification
                 current_sequences = torch.cat(sequences, dim=1)
+                print("verify sequence:", current_sequences)
             else:
                 # for non first verification
                 current_sequences = torch.cat(sequences, dim=1)[:, -verify_block:]
+                print("verify sequence:", current_sequences)
             # 1. convert sequences tokens to text
             text = draft_tokens_to_text(current_sequences)
             print("draft model text:", text)
@@ -243,71 +248,97 @@ def decode(
             # print("verifier_tokens model text:", verifier_tokens)
             # 3. verify output using byte level model
             # we run our mambabyte model and see whether it matches the word level
-            verify_model_logits = verifier(verifier_tokens, verify_inference_params).logits[:, :-1, ]
+            verify_model_logits = verifier(verifier_tokens[:, :-1], inference_params=verify_inference_params).logits
             # 4. get the mismatch position
             if verify_current_step == verify_block - 1:
-                is_mismatch, mismatch_position = get_mismatch_position(verify_model_logits, verifier_tokens[:, 1:], start_verify_idx=start_verify_idx - 1)
-                mismatch_position = start_verify_idx - 1 + mismatch_position
+                is_mismatch, mismatch_position = get_mismatch_position(verify_model_logits, verifier_tokens[:, 1:], start_verify_idx=prompt_start_idx - 1)
+                mismatch_position = prompt_start_idx - 1 + mismatch_position
             else:
                 is_mismatch, mismatch_position = get_mismatch_position(verify_model_logits, verifier_tokens[:, 1:], start_verify_idx=0)
             print("is_mismatch, mismatch_position:", is_mismatch, mismatch_position)
             if is_mismatch:
-                verifier_matched_tokens = verifier_tokens[0, :mismatch_position + 1]
+                verifier_matched_tokens = verifier_tokens[0, :mismatch_position + 1].tolist()
                 print("verifier_matched_tokens:", verifier_matched_tokens)
                 # update the verifier state
                 verify_inference_params.is_backtrack = True
                 print(verifier_tokens[:, :mismatch_position + 1])
-                restart_token = torch.argmax(verifier(verifier_tokens[:, :mismatch_position + 1], verify_inference_params).logits, dim=-1)
+                restart_token = torch.argmax(verifier(verifier_tokens[:, :mismatch_position + 1], inference_params=verify_inference_params).logits, dim=-1)
                 # for unprocess tokens
                 unprocess_tokens = []
                 # tokens up to current position to text
                 mismatch_token = torch.argmax(verify_model_logits[0, mismatch_position], dim=-1)
                 # breakpoint()
                 print("restart_token:", restart_token, "mismatch_token:", mismatch_token)
-                unprocess_tokens.append(mismatch_token)
+                unprocess_tokens.append(mismatch_token.item())
                 print("unprocess_tokens:", unprocess_tokens)
                 # decoding until reach to a empty space
                 verify_inference_params.is_backtrack = False
-                verify_inference_params.is_save = False
+                # verify_inference_params.is_save = False
                 while not is_boundary(mismatch_token):
                     # print("match_token shape 1:", mismatch_token.shape)
-                    verify_model_logits = verifier(mismatch_token[None, :], verify_inference_params).logits
+                    verify_model_logits = verifier(mismatch_token[None, :], inference_params=verify_inference_params).logits
                     # print("verify_model_logits shape:", verify_model_logits.shape)
                     mismatch_token = torch.argmax(verify_model_logits, dim=-1).squeeze(dim=0)
                     # print("match_token shape 2:", mismatch_token.shape)
                     # breakpoint()
-                    unprocess_tokens.append(mismatch_token)
-                verify_inference_params.is_save = True
+                    unprocess_tokens.append(mismatch_token.item())
+                # verify_inference_params.is_save = True
                 print("unprocess_tokens until space:", unprocess_tokens)
-                match_text = verifier_tokens_to_text(verifier_matched_tokens.tolist())
-                print("match_text:", match_text)
-                match_draft_tokens = text_to_draft_tokens(match_text)
-                print("match_draft_tokens:", match_draft_tokens)
-                mismatch_draft_position = len(match_draft_tokens)
-                unprocess_text = verifier_tokens_to_text(unprocess_tokens)
-                print("unprocess_text:", unprocess_text)
+                token_dict = verifier_tokens_draft_tokens_dict(current_sequences)
+                
+                draft_last_match_position = len(token_dict) - 1
+                for i, (start_verify_token, end_verify_token) in enumerate(token_dict):
+                    if start_verify_token > mismatch_position:
+                        draft_last_match_position = i - 1
+                        break
+                
+                print("verifier_matched_tokens + unprocess_tokens:", verifier_matched_tokens, unprocess_tokens)
+                
+                corrected_text = verifier_tokens_to_text(verifier_matched_tokens + unprocess_tokens)
+                print("corrected_text:", corrected_text)
+                
+                correct_draft_tokens = text_to_draft_tokens(corrected_text)
+                print("correct_draft_tokens:", correct_draft_tokens)
+                
+                # match_text = verifier_tokens_to_text(verifier_matched_tokens.tolist())
+                # print("match_text:", match_text)
+                # match_draft_tokens = text_to_draft_tokens(match_text)
+                # print("match_draft_tokens:", match_draft_tokens)
+                # mismatch_draft_position = len(match_draft_tokens)
+                # unprocess_text = verifier_tokens_to_text(unprocess_tokens)
+                # print("unprocess_text:", unprocess_text)
                 # breakpoint()
-                unprocess_draft_tokens = text_to_draft_tokens(unprocess_text)
+                # unprocess_draft_tokens = text_to_draft_tokens(unprocess_text)
                 # breakpoint()
-                inference_params.key_value_memory_dict = inference_params.prev_memory_list[mismatch_draft_position]
+                
+                unprocess_draft_tokens = correct_draft_tokens[draft_last_match_position + 1:]
+                inference_params.key_value_memory_dict = inference_params.prev_memory_list[draft_last_match_position]
                 # breakpoint()
-                sequences_to_add = []
+                # sequences_to_add = []
                 for unprocess_draft_token in unprocess_draft_tokens:
                     # for update hidden state
-                    sequences_to_add.append(unprocess_draft_token[None, :])
+                    # sequences_to_add.append(unprocess_draft_token[None, :])
                     get_logits(unprocess_draft_token[None, :], inference_params)
+                
                 inference_params.prev_memory_list.clear()
-                output_sequences.append(torch.cat([match_draft_tokens, unprocess_draft_tokens], dim=-1))
+                
+                correct_draft_tokens = [correct_draft_tokens.reshape(1, 1) for correct_draft_tokens in correct_draft_tokens.unbind(dim=1)]
+                sequences = sequences[:-verify_block] + correct_draft_tokens
+                
+                print("sequences after verify:", sequences)
+                # output_sequences.append(torch.cat([match_draft_tokens, unprocess_draft_tokens], dim=-1))
                 # print(output_sequences)
                 # breakpoint()
-                element_to_pop = verify_block - mismatch_draft_position
-                sequences = sequences[:-element_to_pop] + sequences_to_add
+                
+                # element_to_pop = verify_block - mismatch_draft_position
+                # sequences = sequences[:-element_to_pop] + sequences_to_add
                 # print("sequences:", sequences)
-                inference_params.seqlen_offset += (-element_to_pop + len(sequences_to_add))
+                
+                inference_params.seqlen_offset += (-verify_block + len(correct_draft_tokens))
             else:
                 # clear cache and move to the next step and keep decoding
                 inference_params.prev_memory_list.clear()
-                output_sequences.append(current_sequences)
+                # output_sequences.append(current_sequences)
                 # print(output_sequences)
                 # breakpoint()
         
