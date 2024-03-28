@@ -140,14 +140,11 @@ class Mamba(nn.Module):
                     ssm_state.copy_(prev_ssm_state)
                     out, _, _ = self.resume_forward(hidden_states, conv_state, ssm_state)
                 else:
-                    # print("no back here:")
-                    conv_state, ssm_state, prev_conv_state, prev_ssm_state  = self._get_states_from_cache_verifier(inference_params, batch)
+                    conv_state, ssm_state, prev_conv_state, prev_ssm_state = self._get_states_from_cache_verifier(inference_params, batch)
                     if inference_params.is_save:
                         prev_conv_state.copy_(conv_state)
                         prev_ssm_state.copy_(ssm_state)
-                    out, _, _ = self.resume_forward(hidden_states, conv_state, ssm_state)
-                    # print("after conv from cache:", inference_params.key_value_memory_dict[self.layer_idx][0])
-                    # print("after ssm_state from cache:", inference_params.key_value_memory_dict[self.layer_idx][1])           
+                    out, _, _ = self.resume_forward(hidden_states, conv_state, ssm_state)        
                 return out
                 
         # We do matmul and transpose BLH -> HBL at the same time
@@ -239,9 +236,6 @@ class Mamba(nn.Module):
         )
         if self.in_proj.bias is not None:
             xz = xz + self.in_proj.bias.to(dtype=xz.dtype)
-
-        # print("before conv_state:", conv_state)
-        # print("before ssm_state:", ssm_state[:, :, -1, :])
         
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         out, conv_state, ssm_state = selective_scan_forward(
@@ -261,8 +255,6 @@ class Mamba(nn.Module):
             conv_state=conv_state, 
             ssm_state=ssm_state,
         )
-        # print("after conv_state:", conv_state)
-        # print("after ssm_state:", ssm_state[:, :, -1, :])
         return out, conv_state, ssm_state
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -328,7 +320,6 @@ class Mamba(nn.Module):
     def _get_states_from_cache_verifier(self, inference_params, batch_size):
         assert self.layer_idx is not None
         if self.layer_idx not in inference_params.key_value_memory_dict:
-            # print("init for:", self.layer_idx)
             batch_shape = (batch_size,)
             conv_state = torch.zeros(
                 batch_size,
@@ -336,9 +327,8 @@ class Mamba(nn.Module):
                 self.d_model * self.expand,
                 device=self.conv1d.weight.device,
                 dtype=self.conv1d.weight.dtype,
-            )
-            conv_state = conv_state.transpose(1, 2)
-            # this looks ugly
+            ).transpose(1, 2)
+            # for memorize state
             ssm_state = torch.zeros(
                 batch_size,
                 self.d_model * self.expand,
@@ -354,8 +344,7 @@ class Mamba(nn.Module):
                 self.d_model * self.expand,
                 device=self.conv1d.weight.device,
                 dtype=self.conv1d.weight.dtype,
-            )
-            prev_conv_state = prev_conv_state.transpose(1, 2)
+            ).transpose(1, 2)
             prev_ssm_state = torch.zeros(
                 batch_size,
                 self.d_model * self.expand,
@@ -367,7 +356,6 @@ class Mamba(nn.Module):
             inference_params.key_value_memory_dict[self.layer_idx] = (conv_state, ssm_state)
             inference_params.prev_key_value_memory_dict[self.layer_idx] = (prev_conv_state, prev_ssm_state)
         else:
-            # print("hit for state:", self.layer_idx)
             conv_state, ssm_state = inference_params.key_value_memory_dict[self.layer_idx]
             prev_conv_state, prev_ssm_state = inference_params.prev_key_value_memory_dict[self.layer_idx]
         return conv_state, ssm_state, prev_conv_state, prev_ssm_state   

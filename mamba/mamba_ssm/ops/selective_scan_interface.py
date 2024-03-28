@@ -26,78 +26,28 @@ def selective_scan_forward(xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_
     delta_rank = delta_proj_weight.shape[1]
     d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
     
-    # if xz.stride(-1) != 1:
-    #     xz = xz.contiguous()
-    
     conv1d_weight = rearrange(conv1d_weight, "d 1 w -> d w")
     x, z = xz.chunk(2, dim=-1)
     conv1d_bias = conv1d_bias.contiguous() if conv1d_bias is not None else None
-    
-    # print("x.stride0:", x.stride())
-    
-    # x = torch.cat((torch.zeros((x.shape[0], x.shape[1], 8), device=x.device), x), dim=-1)[:, :, 8: 8 + x.shape[2]]
-    # print("x.stride0000:", x.stride())
-    
+
     if x.shape[1] == 1:
+        # handle the case the sequence only has one token
         x = torch.nn.functional.pad(x, (0, 0, 1, 0), "constant", 0)[:, 1:, :]
     
     if x.stride(-1) != 1:
         x = x.contiguous()
     
-    # print("x.shape:", x.shape)
-    # print("x.stride1:", x.stride())
-    
     x = rearrange(x, "b l d -> b d l")
-    # print("x.stride2:", x.stride())
-    
-    # conv_next_state = torch.zeros_like(conv_state)
-    
-    # conv_next_state = torch.as_strided(conv_next_state, size=conv_next_state.size(), stride=(conv_next_state.shape[0]*conv_next_state.shape[1], 1, conv_next_state.shape[2]))
-    # print("x.stride0:", x.stride(0))
-    # print("x.stride1:", x.stride(1))
-    # print("x.stride2:", x.stride(2))
-    # print("shape of x:", x.shape)
-    # print("shape of conv1d_weight:", conv1d_weight.shape)
-    # print("shape of conv_state:", conv_state.shape)
-    # print("shape of conv_last_state:", conv_next_state.shape)
-    # x = x.as_strided(size=x.size(), stride=(8, 1, 8))
-    # x = x.as_strided(size=x.size(), stride=(x.shape[1], 1, F.pad(...)))
-    
-    # x_ = F.pad(x, (0, 8 - (x.shape[-1] % 8), 0, 0), "constant", 0)
-    # print(x_.shape)  # (1, d, l); l = 8x
-    # x_ = x_.as_strided(size=x_.size(), stride=(x_.shape[1], 1, x_.shape[2]))
-    # x = x_
-    # print("x.stride():", x.stride())
-    
-    # conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
-    #     x, conv1d_weight, conv1d_bias, None, conv_state, conv_next_state, True
-    # )
-    
-    # print("conv_state1:", conv_state.stride())
+
     conv1d_out, conv_next_state = causal_conv1d_fn(x, conv1d_weight, conv1d_bias, initial_states=conv_state, return_final_states=True, activation="silu")
-    # print("conv_state2:", conv_state.stride())
     conv_state.copy_(conv_next_state)
-    # print("conv_state3:", conv_state.stride())
-    # print("conv_state:", conv_state.shape)
     
     if conv1d_out.stride(-1) != 1:
         conv1d_out = conv1d_out.contiguous()
     
-    # print("conv1d_out:" conv1d_out)
-    
-    # We're being very careful here about the layout, to avoid extra transposes.
-    # We want delta to have d as the slowest moving dimension
-    # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
-    # print("conv1d_out:", conv1d_out.shape)
-    # print("rearrange(conv1d_out, 'b d l -> (b l) d') shape:", rearrange(conv1d_out, 'b d l -> (b l) d').shape)
-    # print("x_proj_weight shape:", x_proj_weight.shape)
-    
     z = rearrange(z, "b l d -> b d l")
     
     x_dbl = F.linear(rearrange(conv1d_out, 'b d l -> (b l) d'), x_proj_weight)  # (bl d)
-    
-    # print("x_dbl:", x_dbl.shape)
-    # print("delta_proj_weight @ x_dbl[:, :delta_rank].t():", (delta_proj_weight @ x_dbl[:, :delta_rank].t()).shape)
     
     delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(), "d (b l) -> b d l", l = L)
     if B is None:  # variable B
@@ -127,39 +77,9 @@ def selective_scan_forward(xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_
     if D is not None:
         D = D.contiguous()
     
-    # out, ssm_state, out_z = selective_scan_cuda.fwd(
-    #     conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus, ssm_state
-    # )
-    
     out, _, out_z = selective_scan_cuda.fwd(
         conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus, ssm_state
     )
-    
-    # if torch.sum(ssm_state) == 0:
-    #     # for the first time
-    #     # print("dsfdfs")
-    #     out, out_ssm_state, out_z = selective_scan_cuda.fwd(
-    #         conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus, None
-    #     )
-    #     ssm_state.copy_(out_ssm_state)
-    #     # ssm_state[:, :, 0, :] = ssm_state[:, :, -1, :]
-    #     # ssm_state[:, :, 1:, :] = 0
-    #     # print("out_ssm_state stride:", out_ssm_state.stride())
-    #     # print("ssm_state stride:", ssm_state.stride())
-    # else:
-    #     # print("dsfxxxxxxdfs")
-    #     out, _, out_z = selective_scan_cuda.fwd(
-    #         conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus, ssm_state
-    #     )
-    #     # shift the ssm state to first chunk to support input next time
-    #     # ssm_state is the first element in third dimension
-    #     # ssm_state[:, :, 0, :] = ssm_state[:, :, -1, :]
-    #     # ssm_state[:, :, 1:, :] = 0
-    #     # print("ssm_state stride:", ssm_state.stride())
-        
-    # print("out_z:", rearrange(out_z, "b d l -> b l d").shape)
-    # print("out_proj_weight:", out_proj_weight.shape)
-    # print("out_proj_bias:", out_proj_bias.shape)
     
     return F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias), conv_state, ssm_state
 

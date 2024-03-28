@@ -162,10 +162,26 @@ def text_to_byte_tokens(text_to_test):
 def byte_tokens_to_text(byte_array):
     return bytes(byte_array).decode('utf-8').replace('\r\n', '\n')
 
+boundary_tokens_utf8_values = {
+    44,  # utf8 value for ','
+    33,  # utf8 value for '!'
+    46,  # utf8 value for '.'
+    32,  # utf8 value for space ' '
+    63,  # utf8 value for '?'
+    40,  # utf8 value for '('
+    41,  # utf8 value for ')'
+    91,  # utf8 value for '['
+    93,  # utf8 value for ']'
+    123, # utf8 value for '{'
+    125, # utf8 value for '}'
+    59,  # utf8 value for ';'
+}
 
 def is_boundary(token):
     # Check if the token is for space (32) or newline (10)
-    return token == 32 or token == 10
+    return token in boundary_tokens_utf8_values
+    # return token == 32
+    # return token == 32 or token == 10 or token == 44
 
 
 def text_tokens_to_byte_tokens_dict(text_tokens):
@@ -175,7 +191,7 @@ def text_tokens_to_byte_tokens_dict(text_tokens):
         # Start index of the current token in byte representation
         start_byte_index = byte_index
         token_text = encoder.decode([token])
-        byte_token_text = token_text.replace('\r\n', '\n')
+        byte_token_text = token_text.replace('\n', '\r\n')
         # Increment byte_index by the byte length of the token
         byte_index += len(byte_token_text.encode('utf-8'))
         # End index is the new byte index
@@ -185,21 +201,16 @@ def text_tokens_to_byte_tokens_dict(text_tokens):
     return word_to_byte_tokens_dict
 
 
-def test_text_tokens_to_byte_tokens_dict():
-    input_ids = text_to_subword_tokens(prompt)
-    word_to_byte_tokens_dict = text_tokens_to_byte_tokens_dict(input_ids)
-    # print(word_to_byte_tokens_dict)
-    byte_prompt = prompt.replace('\r\n', '\n')
-    for token, (start, end) in word_to_byte_tokens_dict.items():
-        token_text = encoder.decode(
-            [input_ids[0, token]]).replace('\r\n', '\n')
-        byte_text = byte_prompt[start:end]
-        assert token_text == byte_text
-        # print(token_text, byte_text)
-
-# Initialize CUDA events
-# start_event = torch.cuda.Event(enable_timing=True)
-# end_event = torch.cuda.Event(enable_timing=True)
+# def test_text_tokens_to_byte_tokens_dict():
+#     input_ids = text_to_subword_tokens(prompt)
+#     word_to_byte_tokens_dict = text_tokens_to_byte_tokens_dict(input_ids)
+#     # print(word_to_byte_tokens_dict)
+#     byte_prompt = prompt.replace('\r\n', '\n')
+#     for token, (start, end) in word_to_byte_tokens_dict.items():
+#         token_text = encoder.decode(
+#             [input_ids[0, token]]).replace('\r\n', '\n')
+#         byte_text = byte_prompt[start:end]
+#         assert token_text == byte_text
 
 input_ids = text_to_subword_tokens(prompt)
 byte_ids = text_to_byte_tokens(prompt)
@@ -214,21 +225,19 @@ output = mambasubword.generate(
     temperature=1,
     top_k=1,
     top_p=0.98,
-    verify_block=3,
-    verifier_tolerance=1,
+    verify_block=4,
+    verifier_tolerance=3,
+    # verifier_prob_tolerance=0.98,
     verifier=mambabyte,
     text_to_draft_tokens=text_to_subword_tokens,
     draft_tokens_to_text=subword_tokens_to_text,
     text_to_verifier_tokens=text_to_byte_tokens,
     verifier_tokens_to_text=byte_tokens_to_text,
     verifier_tokens_draft_tokens_dict=text_tokens_to_byte_tokens_dict,
-    prompt_start_idx=byte_ids.shape[1],
+    verify_input_ids=byte_ids,
     is_boundary=is_boundary,
 )
 
-
 sequences = output.sequences[0].tolist()
-
 output_str = encoder.decode(sequences)
-
 print("output:", output_str)

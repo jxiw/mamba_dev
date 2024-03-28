@@ -162,7 +162,6 @@ class MixerModel(nn.Module):
                 conv_ssm_state_kv_dict[layer_idx] = (conv_state.clone(), ssm_state.clone())
         if inference_params is not None and inference_params.draft_model:  
             inference_params.prev_memory_list.append(conv_ssm_state_kv_dict)
-            # print("inference_params.prev_memory_list:", len(inference_params.prev_memory_list), flush=True)
             
         if not self.fused_add_norm:
             residual = (hidden_states + residual) if residual is not None else hidden_states
