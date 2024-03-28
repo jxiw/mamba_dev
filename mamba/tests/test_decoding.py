@@ -51,11 +51,11 @@ mambabyte = torch.nn.parallel.DistributedDataParallel(
 mambabyte.load_state_dict(torch.load(
     f"/share/rush/pile/pg19_971M/model.pt", map_location=torch.device('cpu')))
 
-mambasubword_hidden_size = 768
-mambasubword_num_hidden_layers = 20
+# mambasubword_hidden_size = 768
+# mambasubword_num_hidden_layers = 20
 
-# mambasubword_hidden_size = 1024
-# mambasubword_num_hidden_layers = 48
+mambasubword_hidden_size = 1024
+mambasubword_num_hidden_layers = 48
 
 # small mamba subword model
 mambasubword_config = {
@@ -81,11 +81,11 @@ mambasubword = torch.nn.parallel.DistributedDataParallel(
     output_device=0,
 )
 
-mambasubword.load_state_dict(torch.load(
-    f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_tiny/checkpoint/step-99000/model.pt", map_location=torch.device('cpu')))
-
 # mambasubword.load_state_dict(torch.load(
-#     f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-150000/model.pt", map_location=torch.device('cpu')))
+#     f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_tiny/checkpoint/step-99000/model.pt", map_location=torch.device('cpu')))
+
+mambasubword.load_state_dict(torch.load(
+    f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-150000/model.pt", map_location=torch.device('cpu')))
 
 # mambasubword.load_state_dict(torch.load(
 #     f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-51000/model.pt", map_location=torch.device('cpu')))
@@ -214,8 +214,8 @@ output = mambasubword.generate(
     temperature=1,
     top_k=1,
     top_p=0.98,
-    verify_block=4,
-    verifier_tolerance=5,
+    verify_block=3,
+    verifier_tolerance=1,
     verifier=mambabyte,
     text_to_draft_tokens=text_to_subword_tokens,
     draft_tokens_to_text=subword_tokens_to_text,
