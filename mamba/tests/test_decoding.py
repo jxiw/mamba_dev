@@ -51,12 +51,15 @@ mambabyte = torch.nn.parallel.DistributedDataParallel(
 mambabyte.load_state_dict(torch.load(
     f"/share/rush/pile/pg19_971M/model.pt", map_location=torch.device('cpu')))
 
-mambasubword_hidden_size = 1792
-mambasubword_num_hidden_layers = 48
+mambasubword_hidden_size = 768
+mambasubword_num_hidden_layers = 20
+
+# mambasubword_hidden_size = 1024
+# mambasubword_num_hidden_layers = 48
 
 # small mamba subword model
 mambasubword_config = {
-    "d_model": 1024,
+    "d_model": mambasubword_hidden_size,
     "fused_add_norm": True,
     "hidden_size": mambasubword_hidden_size,
     "n_layer": mambasubword_num_hidden_layers,
@@ -77,10 +80,18 @@ mambasubword = torch.nn.parallel.DistributedDataParallel(
     device_ids=[0],
     output_device=0,
 )
-mambasubword.load_state_dict(torch.load(
-    f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-51000/model.pt", map_location=torch.device('cpu')))
 
-# large mamba subword model
+mambasubword.load_state_dict(torch.load(
+    f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_tiny/checkpoint/step-99000/model.pt", map_location=torch.device('cpu')))
+
+# mambasubword.load_state_dict(torch.load(
+#     f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-150000/model.pt", map_location=torch.device('cpu')))
+
+# mambasubword.load_state_dict(torch.load(
+#     f"/home/jw2544/SSMWord/train/mamba_h1024_l48_2048_subword_small/checkpoint/step-51000/model.pt", map_location=torch.device('cpu')))
+
+
+# # large mamba subword model
 # mamba_config = {
 #     "d_model": 1792,
 #     "fused_add_norm": True,
@@ -98,8 +109,8 @@ mambasubword.load_state_dict(torch.load(
 # mambasubword = SubWordMambaLMHeadModel(config=mambasubword_config, dtype=torch.bfloat16, device="cuda")
 # mambasubword = torch.nn.parallel.DistributedDataParallel(
 #     mambasubword,
-#     device_ids=[opt.local_rank],
-#     output_device=opt.local_rank,
+#     device_ids=[0],
+#     output_device=0,
 # )
 # mambasubword.load_state_dict(torch.load(f"/home/jw2544/SSMWord/train/mamba_h1792_l48_2048_subword_best/model.pt", map_location=torch.device('cpu')))
 
@@ -126,6 +137,9 @@ this voyage their bills signed.  Having wrote letters into the country and
 read some things I went to bed.
 '''
 
+# prompt = '''I am a '''
+
+# prompt = '''Having wrote letters into the country and read some things I went to bed '''
 
 def text_to_subword_tokens(text_to_test):
     pg_train_tokens = encoder.encode(text_to_test)
@@ -200,7 +214,8 @@ output = mambasubword.generate(
     temperature=1,
     top_k=1,
     top_p=0.98,
-    verify_block=10,
+    verify_block=4,
+    verifier_tolerance=5,
     verifier=mambabyte,
     text_to_draft_tokens=text_to_subword_tokens,
     draft_tokens_to_text=subword_tokens_to_text,
@@ -210,3 +225,10 @@ output = mambasubword.generate(
     prompt_start_idx=byte_ids.shape[1],
     is_boundary=is_boundary,
 )
+
+
+sequences = output.sequences[0].tolist()
+
+output_str = encoder.decode(sequences)
+
+print("output:", output_str)
