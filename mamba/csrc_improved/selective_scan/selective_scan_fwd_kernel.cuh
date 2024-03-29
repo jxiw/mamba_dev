@@ -109,7 +109,7 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
     weight_t *C = reinterpret_cast<weight_t *>(params.C_ptr) + dim_id * kNRows * params.C_d_stride;
     input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;
     scan_t *x = reinterpret_cast<scan_t *>(params.x_ptr) + (batch_id * params.dim + dim_id * kNRows) * params.n_chunks * params.dstate;
-    input_t *init_state_ptr = reinterpret_cast<input_t *>(params.init_state_ptr) + batch_id * params.init_state_batch_stride 
+    weight_t *init_state_ptr = reinterpret_cast<weight_t *>(params.init_state_ptr) + batch_id * params.init_state_batch_stride 
         + dim_id * kNRows * params.init_state_d_stride;
 
     float D_val[kNRows] = {0};
@@ -242,11 +242,12 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                     // restart from an existed state
                     if (chunk == 0) {
                         if constexpr (!kIsComplex) {
-                            running_prefix = threadIdx.x % 32 == 0 ? (1.f, init_state_ptr[batch_id * params.init_state_batch_stride + r * params.init_state_d_stride + state_idx]) : make_float2(1.f, 0.f);
+                            running_prefix = threadIdx.x % 32 == 0 ? make_float2(1.f, init_state_ptr[state_idx]) : make_float2(1.f, 0.f);
                         } else {
-                            running_prefix = threadIdx.x % 32 == 0 ? (1.f, 0.f, 
-                                init_state_ptr[batch_id * params.init_state_batch_stride + r * params.init_state_d_stride + state_idx].real_,
-                                init_state_ptr[batch_id * params.init_state_batch_stride + r * params.init_state_d_stride + state_idx].imag_) : make_float4(1.f, 0.f, 0.f, 0.f);
+                            running_prefix = threadIdx.x % 32 == 0 ? smem_running_prefix[state_idx + r * MAX_DSTATE] : make_float4(1.f, 0.f, 0.f, 0.f);
+                            // running_prefix = threadIdx.x % 32 == 0 ? make_float4(1.f, 0.f, 
+                            //     init_state_ptr[state_idx].real_,
+                            //     init_state_ptr[state_idx].imag_) : make_float4(1.f, 0.f, 0.f, 0.f);
                         }
                     } else {
                         if constexpr (!kIsComplex) {

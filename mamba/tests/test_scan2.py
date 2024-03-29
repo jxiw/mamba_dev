@@ -56,6 +56,7 @@ resume_state = torch.zeros((batch_size, dim, dstate))
 out_first, x_first, *rest = selective_scan_cuda.fwd(u_first, delta_first, A, B_first, C_first, D, z_first, delta_bias, delta_softplus, None)
 first_last_state = x_first[:, :, -1, 1::2]
 
+print("resume_state:", resume_state.stride())
 print("first_last_state:", first_last_state.shape)
 # print(x_first)
 # print("x_first.shape:", x_first.shape)
@@ -68,6 +69,7 @@ resume_state.copy_(x_first[:, :, -1, 1::2])
 print(resume_state.shape)
 print(resume_state.stride())
 
+print("======================")
 out_second, x_second, *rest = selective_scan_cuda.fwd(u_second, delta_second, A, B_second, C_second, D, z_second, delta_bias, delta_softplus, resume_state)
 second_last_state = x_second[:, :, -1, 1::2]
 

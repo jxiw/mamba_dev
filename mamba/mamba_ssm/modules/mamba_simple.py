@@ -139,6 +139,9 @@ class Mamba(nn.Module):
                     conv_state.copy_(prev_conv_state)
                     ssm_state.copy_(prev_ssm_state)
                     out, _, _ = self.resume_forward(hidden_states, conv_state, ssm_state)
+                elif inference_params.rnn_mode:
+                    out, _, _ = self.step(hidden_states, conv_state, ssm_state[:, :, 0, 1::2])
+                    return out
                 else:
                     conv_state, ssm_state, prev_conv_state, prev_ssm_state = self._get_states_from_cache_verifier(inference_params, batch)
                     if inference_params.is_save:

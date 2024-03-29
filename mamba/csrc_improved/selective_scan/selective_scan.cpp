@@ -143,6 +143,9 @@ void set_ssm_params_fwd(SSMParamsBase &params,
     if (is_ssm_resume) {
         params.init_state_batch_stride = init_state.stride(0);
         params.init_state_d_stride = init_state.stride(1);
+    } else{
+        params.init_state_batch_stride = 0;
+        params.init_state_d_stride = 0;
     }
 
     params.out_batch_stride = out.stride(0);
@@ -183,8 +186,8 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         bool has_z,
                         bool delta_softplus,
                         bool recompute_out_z) {
-    at::Tensor init_state;
     // Pass in "dout" instead of "out", we're not gonna use "out" unless we have z
+    at::Tensor init_state;
     set_ssm_params_fwd(params, batch, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
                        u, delta, A, B, C, has_z ? out : dout,
                        has_z ? z : dout,
@@ -324,9 +327,10 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     at::Tensor x;
     x = torch::empty({batch_size, dim, n_chunks, dstate * 2}, u.options().dtype(weight_type));
     
-    at::Tensor init_state;
     const bool is_ssm_resume = init_state_.has_value();
-    if (init_state_.has_value()) {
+    at::Tensor init_state;
+
+    if (is_ssm_resume) {
         init_state = init_state_.value();
         CHECK_SHAPE(init_state, batch_size, dim, dstate);
     }

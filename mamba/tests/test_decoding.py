@@ -162,26 +162,26 @@ def text_to_byte_tokens(text_to_test):
 def byte_tokens_to_text(byte_array):
     return bytes(byte_array).decode('utf-8').replace('\r\n', '\n')
 
-boundary_tokens_utf8_values = {
-    44,  # utf8 value for ','
-    33,  # utf8 value for '!'
-    46,  # utf8 value for '.'
-    32,  # utf8 value for space ' '
-    63,  # utf8 value for '?'
-    40,  # utf8 value for '('
-    41,  # utf8 value for ')'
-    91,  # utf8 value for '['
-    93,  # utf8 value for ']'
-    123, # utf8 value for '{'
-    125, # utf8 value for '}'
-    59,  # utf8 value for ';'
-}
+# boundary_tokens_utf8_values = {
+#     44,  # utf8 value for ','
+#     33,  # utf8 value for '!'
+#     46,  # utf8 value for '.'
+#     32,  # utf8 value for space ' '
+#     63,  # utf8 value for '?'
+#     40,  # utf8 value for '('
+#     41,  # utf8 value for ')'
+#     91,  # utf8 value for '['
+#     93,  # utf8 value for ']'
+#     123, # utf8 value for '{'
+#     125, # utf8 value for '}'
+#     59,  # utf8 value for ';'
+# }
 
 def is_boundary(token):
     # Check if the token is for space (32) or newline (10)
-    return token in boundary_tokens_utf8_values
+    # return token in boundary_tokens_utf8_values
     # return token == 32
-    # return token == 32 or token == 10 or token == 44
+    return token == 32 or token == 10 or token == 44
 
 
 def text_tokens_to_byte_tokens_dict(text_tokens):
@@ -199,7 +199,6 @@ def text_tokens_to_byte_tokens_dict(text_tokens):
         # Store the mapping
         word_to_byte_tokens_dict.append((start_byte_index, end_byte_index))
     return word_to_byte_tokens_dict
-
 
 # def test_text_tokens_to_byte_tokens_dict():
 #     input_ids = text_to_subword_tokens(prompt)
@@ -225,9 +224,9 @@ output = mambasubword.generate(
     temperature=1,
     top_k=1,
     top_p=0.98,
-    verify_block=4,
-    verifier_tolerance=3,
-    # verifier_prob_tolerance=0.98,
+    verify_block=10,
+    verifier_tolerance=10,
+    verifier_prob_tolerance=0.2,
     verifier=mambabyte,
     text_to_draft_tokens=text_to_subword_tokens,
     draft_tokens_to_text=subword_tokens_to_text,

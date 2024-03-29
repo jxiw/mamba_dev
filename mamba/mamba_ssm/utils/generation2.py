@@ -32,6 +32,7 @@ class InferenceParams:
     prev_key_value_memory_dict: dict = field(default_factory=dict)
     is_backtrack: bool = False
     is_save: bool = True
+    rnn_mode: bool = True
 
     def reset(self, max_seqlen, max_batch_size):
         self.max_seqlen = max_seqlen
@@ -112,6 +113,7 @@ def decode(
     enable_timing=False,
     verify_block=10,
     verifier_tolerance=3,
+    verifier_prob_tolerance=0.9,
     verifier=None,
     text_to_draft_tokens=None,
     draft_tokens_to_text=None,
@@ -195,15 +197,33 @@ def decode(
             return True
         return False
 
-    def get_mismatch_position(verify_model_logits, verifier_tokens, start_verify_idx, topK=3):
+    def get_mismatch_position_topK(model_output_logits, verifier_tokens, topK=3, topP=0.8):
         # get the ranks of label output logits from draft model
         # within top K candidate of verify model
-        verifier_tokens_logits = torch.gather(verify_model_logits, 2, verifier_tokens.unsqueeze(-1))
-        ranks = ((verify_model_logits > verifier_tokens_logits).sum(dim=2))[:, start_verify_idx:]
+        verifier_tokens_logits = torch.gather(model_output_logits, 2, verifier_tokens.unsqueeze(-1))
+        ranks = ((model_output_logits > verifier_tokens_logits).sum(dim=2))
         mismatch_position = (ranks >= topK).int()
         first_mismatch_indices = torch.argmax(mismatch_position, dim=1)
-        return ranks[0, first_mismatch_indices] >= topK, first_mismatch_indices
+        return mismatch_position[0, first_mismatch_indices].item(), first_mismatch_indices
 
+    def get_mismatch_position_topP(model_output_logits, verifier_tokens, topP=0.8):
+        # print("verifier_tokens.shape", verifier_tokens.shape)
+        # print("model_output_logits.shape", model_output_logits.shape)
+        model_output_prob = F.softmax(model_output_logits, dim=-1)
+        # print("model_output_prob:", model_output_prob)
+        max_probs = torch.max(model_output_prob, dim=-1).values
+        # print("max_probs:", max_probs)
+        # print("model_output_prob.shape", model_output_prob.shape)
+        threshold = topP * max_probs
+        verifier_tokens_probs = torch.gather(model_output_prob, 2, verifier_tokens.unsqueeze(-1)).squeeze(-1)
+        # print("verifier_tokens_probs:", verifier_tokens_probs.shape)
+        mismatch_position = (threshold > verifier_tokens_probs).int()
+        # print("mismatch_position:", mismatch_position)
+        first_mismatch_indices = torch.argmax(mismatch_position, dim=1)
+        # print("first_mismatch_indices:", first_mismatch_indices)
+        # print("mismatch_position[0, first_mismatch_indices].item():", mismatch_position[0, first_mismatch_indices].item())
+        return mismatch_position[0, first_mismatch_indices].item(), first_mismatch_indices
+        
     start = torch.cuda.Event(enable_timing=enable_timing)
     end = torch.cuda.Event(enable_timing=enable_timing)
 
@@ -238,9 +258,27 @@ def decode(
             # verify output using byte level model
             # we run our mambabyte model and see whether it matches the word level
             verifier_tokens = torch.cat((prev_unverified_token, text_to_verifier_tokens(text)), dim=-1)
-            verify_model_logits = verifier(verifier_tokens[:, :-1], inference_params=verify_inference_params).logits     
+            model_output_logits = verifier(verifier_tokens[:, :-1], inference_params=verify_inference_params).logits     
+            
             # get the mismatch position
-            is_mismatch, mismatch_position = get_mismatch_position(verify_model_logits, verifier_tokens[:, 1:], start_verify_idx=0, topK=verifier_tolerance)
+            # is_mismatch_topK, mismatch_position_topK = get_mismatch_position_topK(model_output_logits, verifier_tokens[:, 1:], topK=verifier_tolerance)
+            # if verifier_prob_tolerance is None or verifier_prob_tolerance == 0:
+            #     is_mismatch = is_mismatch_topK
+            #     mismatch_position = mismatch_position_topK
+            # else:
+            #     is_mismatch_topP, mismatch_position_topP = get_mismatch_position_topP(model_output_logits, verifier_tokens[:, 1:], topP=verifier_prob_tolerance)
+            #     # print("is_mismatch_topK, is_mismatch_topP:", is_mismatch_topK, is_mismatch_topP)
+            #     if is_mismatch_topK or is_mismatch_topP:
+            #         is_mismatch = True
+            #         # print("mismatch_position_topK, mismatch_position_topP:", mismatch_position_topK, mismatch_position_topP)
+            #         mismatch_position = min(mismatch_position_topK, mismatch_position_topP)
+            #     else:
+            #         is_mismatch = False
+            
+            is_mismatch, mismatch_position = get_mismatch_position_topK(model_output_logits, verifier_tokens[:, 1:], topK=verifier_prob_tolerance)
+            
+            # is_mismatch, mismatch_position = get_mismatch_position_topP(model_output_logits, verifier_tokens[:, 1:], topP=verifier_prob_tolerance)
+            
             if is_mismatch:
                 # handle mismatch, verifier_matched_tokens
                 verifier_matched_tokens = verifier_tokens[0, :mismatch_position + 1].tolist()
@@ -251,7 +289,7 @@ def decode(
                 # for unprocess tokens
                 unprocess_tokens = []
                 # tokens up to current position to text
-                mismatch_token = torch.argmax(verify_model_logits[:, mismatch_position:mismatch_position + 1], dim=-1)
+                mismatch_token = torch.argmax(model_output_logits[:, mismatch_position:mismatch_position + 1], dim=-1)
                 # restart token should match the mismatch token
                 # print("restart_token:", restart_token, "mismatch_token:", mismatch_token)
                 unprocess_tokens.append(mismatch_token.item())
@@ -260,14 +298,16 @@ def decode(
                 verify_inference_params.is_backtrack = False
                 verify_inference_params.is_save = False
                 total_gen_mambabyte += 1
+                verify_inference_params.rnn_mode = True
                 while True:
-                    verify_model_logits = verifier(mismatch_token, inference_params=verify_inference_params).logits
-                    mismatch_token = torch.argmax(verify_model_logits, dim=-1)
+                    model_output_logits = verifier(mismatch_token, inference_params=verify_inference_params).logits
+                    mismatch_token = torch.argmax(model_output_logits, dim=-1)
                     unprocess_tokens.append(mismatch_token.item())
                     total_gen_mambabyte += 1
                     if is_boundary(mismatch_token):
                         prev_unverified_token = mismatch_token
-                        break        
+                        break
+                verify_inference_params.rnn_mode = False      
                 verify_inference_params.is_save = True
                 # print("unprocess_tokens until space:", unprocess_tokens)
                 token_dict = verifier_tokens_draft_tokens_dict(current_sequences)
