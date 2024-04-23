@@ -80,6 +80,7 @@ void set_ssm_params_fwd(SSMParamsBase &params,
                         void* x_ptr,
                         bool has_z,
                         bool delta_softplus,
+                        const at::Tensor init_state,
                         bool is_ssm_resume=false) {
 
     // Reset the parameters
@@ -138,6 +139,15 @@ void set_ssm_params_fwd(SSMParamsBase &params,
         params.out_z_batch_stride = out_z.stride(0);
         params.out_z_d_stride = out_z.stride(1);
     }
+    params.init_state_ptr = is_ssm_resume ? init_state.data_ptr() : nullptr;
+    if (is_ssm_resume) {
+        params.init_state_batch_stride = init_state.stride(0);
+        params.init_state_d_stride = init_state.stride(1);
+    } else{
+        params.init_state_batch_stride = 0;
+        params.init_state_d_stride = 0;
+    }
+
     params.out_batch_stride = out.stride(0);
     params.out_d_stride = out.stride(1);
 }
@@ -175,7 +185,9 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         void* ddelta_bias_ptr,
                         bool has_z,
                         bool delta_softplus,
-                        bool recompute_out_z) {
+                        bool recompute_out_z,
+                        const at::Tensor init_state,
+                        bool is_ssm_resume=false) {
     // Pass in "dout" instead of "out", we're not gonna use "out" unless we have z
     set_ssm_params_fwd(params, batch, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
                        u, delta, A, B, C, has_z ? out : dout,
@@ -183,7 +195,7 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                        // If not recompute_out_z, pass dout instead of out_z.
                        // This won't be used by the bwd kernel
                        recompute_out_z ? out_z : dout,
-                       D_ptr, delta_bias_ptr, x_ptr, has_z, delta_softplus);
+                       D_ptr, delta_bias_ptr, x_ptr, has_z, delta_softplus, init_state, is_ssm_resume);
     if (!recompute_out_z) { params.out_z_ptr = nullptr; }
 
     // Set the pointers and strides.
@@ -223,6 +235,16 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
         params.dz_batch_stride = dz.stride(0);
         params.dz_d_stride = dz.stride(1);
     }
+
+    params.is_ssm_resume = is_ssm_resume;
+    params.init_state_ptr = is_ssm_resume ? init_state.data_ptr() : nullptr;
+    if (is_ssm_resume) {
+        params.init_state_batch_stride = init_state.stride(0);
+        params.init_state_d_stride = init_state.stride(1);
+    } else{
+        params.init_state_batch_stride = 0;
+        params.init_state_d_stride = 0;
+    }
 }
 
 std::vector<at::Tensor>
@@ -232,7 +254,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
                   const c10::optional<at::Tensor> &z_,
                   const c10::optional<at::Tensor> &delta_bias_,
                   bool delta_softplus,
-                  const c10::optional<at::Tensor> &x_) {
+                  const c10::optional<at::Tensor> &init_state_) {
     auto input_type = u.scalar_type();
     auto weight_type = A.scalar_type();
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
@@ -313,13 +335,17 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     // Right now u has BHL layout and delta has HBL layout, and we want out to have HBL layout
     at::Tensor out = torch::empty_like(delta);
 
-    const bool is_ssm_resume = x_.has_value();
     at::Tensor x;
-    if (x_.has_value()) {
-        x = x_.value();
-        CHECK_SHAPE(x, batch_size, dim, n_chunks, dstate * 2);
-    } else {
-        x = torch::empty({batch_size, dim, n_chunks, dstate * 2}, u.options().dtype(weight_type));
+    x = torch::empty({batch_size, dim, n_chunks, dstate * 2}, u.options().dtype(weight_type));
+    
+    const bool is_ssm_resume = init_state_.has_value();
+    at::Tensor init_state;
+
+    if (is_ssm_resume) {
+        init_state = init_state_.value();
+        TORCH_CHECK(init_state.is_cuda());
+        TORCH_CHECK(init_state.scalar_type() == weight_type);
+        CHECK_SHAPE(init_state, batch_size, dim, dstate);
     }
 
     SSMParamsBase params;
@@ -330,6 +356,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
                        x.data_ptr(),
                        has_z,
                        delta_softplus,
+                       init_state,
                        is_ssm_resume);
 
     // Otherwise the kernel will be launched from cuda:0 device
@@ -357,7 +384,8 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                   const c10::optional<at::Tensor> &out_,
                   c10::optional<at::Tensor> &dz_,
                   bool delta_softplus,
-                  bool recompute_out_z) {
+                  bool recompute_out_z,
+                  const c10::optional<at::Tensor> &init_state_) {
     auto input_type = u.scalar_type();
     auto weight_type = A.scalar_type();
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
@@ -476,6 +504,18 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     at::Tensor ddelta_bias;
     if (delta_bias_.has_value()) { ddelta_bias = torch::zeros_like(delta_bias_.value()); }
 
+    const bool is_ssm_resume = init_state_.has_value();
+    at::Tensor init_state;
+    if (is_ssm_resume) {
+        printf("resume");
+        init_state = init_state_.value();
+        TORCH_CHECK(init_state.is_cuda());
+        TORCH_CHECK(init_state.scalar_type() == weight_type);
+        CHECK_SHAPE(init_state, batch_size, dim, dstate);
+    } else {
+        printf("not resume");
+    }
+
     SSMParamsBwd params;
     set_ssm_params_bwd(params, batch_size, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
                        u, delta, A, B, C, z, out, out_z,
@@ -485,7 +525,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                        dout, du, ddelta, dA, dB, dC, dz,
                        D_.has_value() ? dD.data_ptr() : nullptr,
                        delta_bias_.has_value() ? ddelta_bias.data_ptr() : nullptr,
-                       has_z, delta_softplus, recompute_out_z);
+                       has_z, delta_softplus, recompute_out_z, init_state, is_ssm_resume);
 
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing
